@@ -6,10 +6,14 @@ from flask import Flask, request, jsonify, url_for, send_from_directory
 from flask_migrate import Migrate
 from flask_swagger import swagger
 from api.utils import APIException, generate_sitemap
-from api.models import db
+from api.models import db, User
 from api.routes import api
 from api.admin import setup_admin
 from api.commands import setup_commands
+from flask_cors import CORS
+
+from sqlalchemy import select
+from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required, JWTManager
 
 # from models import Person
 
@@ -30,6 +34,13 @@ else:
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 MIGRATE = Migrate(app, db, compare_type=True)
 db.init_app(app)
+
+# JWT configuration
+app.config["JWT_SECRET_KEY"] = "super-secreto-apoteosico"  # Change this!
+jwt = JWTManager(app)
+
+# CORS configuration
+CORS(app)
 
 # add the admin
 setup_admin(app)
@@ -57,13 +68,64 @@ def sitemap():
     return send_from_directory(static_file_dir, 'index.html')
 
 # any other endpoint will try to serve it like a static file
-@app.route('/<path:path>', methods=['GET'])
+
+
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def serve_any_other_file(path):
     if not os.path.isfile(os.path.join(static_file_dir, path)):
         path = 'index.html'
     response = send_from_directory(static_file_dir, path)
     response.cache_control.max_age = 0  # avoid cache memory
     return response
+
+
+@app.route('/signup', methods=['POST'])
+def handle_signup():
+
+    body = request.get_json()
+
+    if not body or 'email' not in body or 'password' not in body:
+        raise APIException('Email and password are required', status_code=400)
+
+    new_user = User(
+        email=body.get("email"),
+        password=body.get("password"),
+        surname=body.get("surname"),
+        name=body.get("name"),
+        address=body.get("address"),
+        is_active=True
+    )
+
+    db.session.add(new_user)
+    db.session.commit()
+
+    response_body = {
+        "message": "User created successfully",
+        "ok": True,
+    }
+
+    return jsonify(response_body), 201
+
+
+@app.route('/login', methods=['POST'])
+def handle_login():
+
+    email = request.json.get("email", None)
+    password = request.json.get("password", None)
+
+    query_user = db.session.execute(select(User).where(
+        User.email == email)).scalar_one_or_none()
+
+    print("query_user", query_user)
+
+    if query_user is None:
+        return jsonify({"msg": "email does not exist"}), 404
+
+    if email != query_user.email or password != query_user.password:
+        return jsonify({"msg": "Bad email or password"}), 401
+
+    access_token = create_access_token(identity=email)
+    return jsonify({"user_id": query_user.id, "user_logged": query_user.email, "access_token": access_token}, 201)
 
 
 # this only runs if `$ python src/main.py` is executed
